@@ -3,36 +3,44 @@
 #include <iostream>
 #include <chrono>
 #include <thread>
+#include <atomic>
 
 int main() {
-    std::cout << "=== RT-Scheduler: Real-Time Multithreaded Event Scheduler ===\n";
-    std::cout << "Simulating CERN-style timing pulse dispatch...\n\n";
+    std::cout << "=== rt-scheduler: multithreaded event scheduler ===\n\n";
 
     Scheduler scheduler;
 
-    // Event 1: Heartbeat pulse every 500ms, fires 6 times
-    scheduler.addEvent(Event("HeartbeatPulse", std::chrono::milliseconds(500), 6,
-        []() { std::cout << "  >> Pulse sync signal dispatched.\n"; }));
+    // Track how many times each event actually fired
+    std::atomic<int> heartbeat_count{0};
+    std::atomic<int> sensor_count{0};
+    std::atomic<int> watchdog_count{0};
+    std::atomic<int> status_count{0};
 
-    // Event 2: Sensor poll every 1s, fires 3 times
-    scheduler.addEvent(Event("SensorPoll", std::chrono::milliseconds(1000), 3,
-        []() { std::cout << "  >> Sensor data acquired.\n"; }));
+    scheduler.addEvent(Event("heartbeat",  std::chrono::milliseconds(500),  6,
+        [&]() { heartbeat_count++; }));
 
-    // Event 3: Status log every 1.5s, fires 2 times
-    scheduler.addEvent(Event("StatusLog", std::chrono::milliseconds(1500), 2,
-        []() { std::cout << "  >> System status: NOMINAL.\n"; }));
+    scheduler.addEvent(Event("sensor_poll", std::chrono::milliseconds(1000), 3,
+        [&]() { sensor_count++; }));
 
-    // Event 4: Watchdog check every 2s, fires 2 times
-    scheduler.addEvent(Event("WatchdogCheck", std::chrono::milliseconds(2000), 2,
-        []() { std::cout << "  >> Watchdog: all threads alive.\n"; }));
+    scheduler.addEvent(Event("status_log", std::chrono::milliseconds(1500), 2,
+        [&]() { status_count++; }));
+
+    scheduler.addEvent(Event("watchdog",   std::chrono::milliseconds(2000), 2,
+        [&]() { watchdog_count++; }));
 
     scheduler.start();
-
-    // Run for 4 seconds then cleanly shut down
     std::this_thread::sleep_for(std::chrono::seconds(4));
     scheduler.stop();
     scheduler.join();
 
-    std::cout << "\n=== Scheduler stopped cleanly. All threads joined. ===\n";
+    std::cout << "\n=== results ===\n";
+    std::cout << "heartbeat  fired: " << heartbeat_count.load()
+              << " (expected 6)\n";
+    std::cout << "sensor_poll fired: " << sensor_count.load()
+              << " (expected 3)\n";
+    std::cout << "status_log fired: " << status_count.load()
+              << " (expected 2)\n";
+    std::cout << "watchdog   fired: " << watchdog_count.load()
+              << " (expected 2)\n";
     return 0;
 }
