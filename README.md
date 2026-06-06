@@ -1,25 +1,27 @@
-# rt-scheduler — Real-Time Multithreaded Event Scheduler in C++
+# rt-scheduler
 
-A POSIX-thread-based real-time event scheduler demonstrating systems programming concepts relevant to precision timing systems (e.g., CERN White Rabbit).
+A multithreaded event scheduler in C++17 using POSIX threads directly.
 
-## Architecture
-Scheduler
-├── addEvent(Event)   → registers timed events
-├── start()           → spawns one pthread per event
-├── stop()            → sets atomic stop flag
-└── join()            → waits for all threads to finish
-Event
-├── name, interval, repeat_count
-└── callback (std::function<void()>)
-## Features
-- **Multithreaded** — each event runs on its own POSIX thread (`pthread_create` / `pthread_join`)
-- **Precise timing** — `std::chrono::milliseconds` interval control per event
-- **Atomic shutdown** — `std::atomic<bool>` stop flag for race-free thread teardown
-- **OOP design** — clean `Event` / `Scheduler` class separation
-- **Unit tested** — 6 Google Test cases (100% passing, 1.41s)
-- **CMake build** — auto-fetches GTest, cross-platform toolchain
+## What it does
 
-## Build & Run
+You register named events with an interval and a repeat count. The scheduler spawns one `pthread` per event. Each thread sleeps until its next fire time using `std::this_thread::sleep_until` (which accumulates less drift than repeated `sleep_for` calls), executes the callback, and records how far the actual wake time deviated from the target.
+
+## Why pthreads instead of std::thread
+
+`std::thread` is fine for most use cases. I used `pthread_create` directly because I wanted to understand what `std::thread` wraps — specifically the thread attribute API (`pthread_attr_t`), stack size control, and the explicit join semantics. The scheduler works correctly with either; the choice was deliberate for learning purposes.
+
+## Thread ownership and memory safety
+
+`ThreadArgs` is allocated with `std::make_unique`, then `release()`d into the `pthread` via `void*`. The thread immediately re-wraps the raw pointer in a `unique_ptr`, so the memory is freed on any exit path. This is the standard pattern for passing owned data across the POSIX thread API boundary.
+
+## Drift measurement
+
+`sleep_until` is not a real-time guarantee on a non-RTOS. On macOS, the scheduler is preemptible and the kernel does not guarantee wake times. The scheduler measures actual vs expected wake time in microseconds and prints it per-fire:
+[19:46:52] heartbeat  fired=1  drift=5046us
+[19:46:53] sensor_poll fired=1  drift=5046us
+Typical drift on macOS is 3–5ms. On a real-time kernel (PREEMPT_RT Linux) with `SCHED_FIFO`, this drops to tens of microseconds. The measurement is there to make the gap between "precise timing" as a claim and "precise timing" as a measured property visible.
+
+## Build
 
 ```bash
 mkdir build && cd build
@@ -28,42 +30,14 @@ make
 ./rt_scheduler
 ```
 
-## Run Tests
+## Tests
 
 ```bash
-cd build
-ctest --output-on-failure
+cd build && ctest --output-on-failure
 ```
 
-## Sample Output
-=== RT-Scheduler: Real-Time Multithreaded Event Scheduler ===
-Simulating CERN-style timing pulse dispatch...
-[10:32:16] EVENT fired: HeartbeatPulse
+6 tests: event registration, multiple events, callback execution count, clean shutdown of an infinite-repeat event, name storage, interval storage.
 
+## Known limitations
 
-Pulse sync signal dispatched.
-[10:32:17] EVENT fired: SensorPoll
-Sensor data acquired.
-[10:32:17] EVENT fired: StatusLog
-System status: NOMINAL.
-[10:32:18] EVENT fired: WatchdogCheck
-Watchdog: all threads alive.
-
-
-=== Scheduler stopped cleanly. All threads joined. ===
-## Test Coverage
-
-| Test | What it verifies |
-|---|---|
-| `AddEvent` | Single event registered correctly |
-| `MultipleEvents` | Multiple events tracked independently |
-| `CallbackFires` | Callback executes exact repeat count |
-| `CleanStop` | Infinite event stops without hanging |
-| `NameStored` | Event name stored correctly |
-| `IntervalStored` | Interval stored correctly |
-
-## Skills Demonstrated
-C++17 · POSIX threads (pthreads) · std::chrono · std::atomic · OOP · CMake · Google Test · Real-Time Systems
-
-## Relevance
-Directly mirrors precision timing dispatch systems such as CERN's White Rabbit timing infrastructure, where events must fire on deterministic schedules across concurrent threads.
+The stop flag is `std::atomic<bool>`. Threads check it once per loop iteration, after waking from sleep. This means a thread can fire one more time after `stop()` is called if it woke up between the stop call and the flag check. For the current use case this is acceptable. A condition variable would allow immediate cancellation but adds complexity that isn't justified here.
